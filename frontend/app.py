@@ -1,6 +1,8 @@
 import streamlit as st
+
 from backend.integrations.assessment_tool import AssessmentTool
 from backend.integrations.email_tool import EmailTool
+
 from backend.resume_parser import (
     extract_resume_text,
     extract_skills,
@@ -17,16 +19,37 @@ from backend.matching.matcher import (
 from backend.database.database import (
     create_tables,
     add_candidate,
-    get_candidates
+    get_candidates,
+    update_candidate_status,
+    get_candidates_by_status
 )
 
 from backend.matching.ranking import rank_candidates
+
 from backend.scheduling.scheduler import schedule_interview
+
 from backend.communication.templates import (
     interview_invitation,
     shortlist_message,
     rejection_message,
     interview_reminder
+)
+
+from backend.candidate_details.notice_salary import (
+    extract_notice_period,
+    extract_salary_expectation,
+    check_notice_period,
+    check_salary_expectation
+)
+
+from backend.candidate_details.education import (
+    recognize_education
+)
+
+from backend.candidate_details.location import (
+    extract_location,
+    extract_relocation_willingness,
+    check_location_match
 )
 
 
@@ -81,6 +104,37 @@ job_description = st.text_area(
 
 
 # ------------------------------------------------
+# Recruitment requirements
+# ------------------------------------------------
+
+st.subheader("Recruitment Requirements")
+
+maximum_notice = st.number_input(
+    "Maximum Notice Period (days)",
+    min_value=0,
+    max_value=180,
+    value=60
+)
+
+minimum_salary = st.number_input(
+    "Minimum Salary (LPA)",
+    min_value=0.0,
+    value=6.0
+)
+
+maximum_salary = st.number_input(
+    "Maximum Salary (LPA)",
+    min_value=0.0,
+    value=10.0
+)
+
+job_location = st.text_input(
+    "Job Location",
+    value="Hyderabad"
+)
+
+
+# ------------------------------------------------
 # Screen candidate
 # ------------------------------------------------
 
@@ -92,6 +146,14 @@ if resume_file and job_description:
 
             # 1. Extract resume text
             resume_text = extract_resume_text(resume_file)
+
+            notice_period = extract_notice_period(resume_text)
+            expected_salary = extract_salary_expectation(resume_text)
+
+            education = recognize_education(resume_text)
+
+            candidate_location = extract_location(resume_text)
+            relocation = extract_relocation_willingness(resume_text)
 
             if not resume_text.strip():
 
@@ -234,7 +296,80 @@ if resume_file and job_description:
                     )
 
 
-                # 10. Save candidate
+                # 10. Candidate details
+                st.subheader("Candidate Details")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.write(
+                        "**Notice Period:**",
+                        f"{notice_period} days"
+                        if notice_period is not None
+                        else "Not Available"
+                    )
+
+                    st.write(
+                        "**Expected Salary:**",
+                        f"{expected_salary} LPA"
+                        if expected_salary is not None
+                        else "Not Available"
+                    )
+
+                    st.write(
+                        "**Education:**",
+                        education["degree"]
+                        if education["degree"]
+                        else "Not Available"
+                    )
+
+                with col2:
+                    st.write(
+                        "**College:**",
+                        education["college"]
+                        if education["college"]
+                        else "Not Available"
+                    )
+
+                    st.write(
+                        "**Location:**",
+                        candidate_location
+                        if candidate_location
+                        else "Not Available"
+                    )
+
+                    st.write(
+                        "**Relocation Willingness:**",
+                        relocation
+                    )
+
+
+                # 11. Requirement matching
+                notice_result = check_notice_period(
+                    notice_period,
+                    maximum_notice
+                )
+
+                salary_result = check_salary_expectation(
+                    expected_salary,
+                    minimum_salary,
+                    maximum_salary
+                )
+
+                location_result = check_location_match(
+                    candidate_location,
+                    job_location
+                )
+
+                st.subheader("Requirement Matching")
+
+                st.write("**Notice Period:**", notice_result)
+                st.write("**Salary Expectation:**", salary_result)
+                st.write("**Location:**", location_result)
+                st.write("**Relocation:**", relocation)
+
+
+                # 12. Save candidate
                 add_candidate(
                     name=name,
                     email=email,
@@ -250,7 +385,7 @@ if resume_file and job_description:
                 )
 
 
-                # 11. Resume text
+                # 13. Resume text
                 with st.expander(
                     "📄 View Extracted Resume Text"
                 ):
@@ -327,7 +462,6 @@ try:
                 }
             )
 
-
         st.dataframe(
             ranking_data,
             use_container_width=True
@@ -346,6 +480,8 @@ except Exception as e:
     st.error(
         f"Could not load candidate ranking: {e}"
     )
+
+
 # ------------------------------------------------
 # Interview Scheduling
 # ------------------------------------------------
@@ -436,6 +572,8 @@ if st.button("📅 Schedule Interview"):
         st.error(
             f"Could not schedule interview: {e}"
         )
+
+
 # ------------------------------------------------
 # Communication Templates
 # ------------------------------------------------
@@ -534,6 +672,12 @@ if st.button("✉️ Generate Message"):
             message,
             height=300
         )
+
+
+# ------------------------------------------------
+# Candidate Assessment
+# ------------------------------------------------
+
 st.divider()
 
 st.header("💻 Candidate Assessment")
@@ -577,6 +721,12 @@ if st.button("💻 Create Assessment"):
         st.write("**Assessment ID:**", result["assessment_id"])
         st.write("**Status:**", result["status"])
         st.write("**Platform:**", result["platform"])
+
+
+# ------------------------------------------------
+# Recruitment Email
+# ------------------------------------------------
+
 st.divider()
 
 st.header("📧 Recruitment Email")
@@ -628,3 +778,58 @@ if st.button("📧 Send Recruitment Email"):
         st.write("**Message:**", result["message"])
         st.write("**Status:**", result["status"])
         st.write("**Platform:**", result["platform"])
+
+
+# ------------------------------------------------
+# Candidate Pipeline
+# ------------------------------------------------
+
+st.divider()
+
+st.header("📊 Candidate Pipeline")
+
+pipeline_candidates = get_candidates()
+
+for candidate in pipeline_candidates:
+
+    candidate_id = candidate[0]
+    candidate_name = candidate[1]
+    candidate_email = candidate[2]
+    match_score = candidate[5]
+    current_status = candidate[6]
+
+    st.write("###", candidate_name)
+    st.write("Email:", candidate_email)
+    st.write("Match Score:", f"{match_score}%")
+    st.write("Current Status:", current_status)
+
+    statuses = [
+        "Applied",
+        "Shortlisted",
+        "Assessment",
+        "Interview",
+        "Selected",
+        "Rejected"
+    ]
+
+    new_status = st.selectbox(
+        "Status",
+        statuses,
+        index=statuses.index(current_status),
+        key=f"pipeline_status_{candidate_id}"
+    )
+
+    if st.button(
+        "Update Candidate Status",
+        key=f"pipeline_update_{candidate_id}"
+    ):
+        update_candidate_status(
+            candidate_id,
+            new_status
+        )
+
+        st.success(
+            f"✅ {candidate_name} status updated to {new_status}"
+        )
+
+        st.rerun()
